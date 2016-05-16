@@ -1,0 +1,31 @@
+{  
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "",
+      "Effect": "Allow",
+      "Action": [
+        "s3:AbortMultipartUpload",
+        "s3:GetBucketLocation",
+        "s3:GetObject",
+        "s3:ListBucket",
+        "s3:ListBucketMultipartUploads",
+        "s3:PutObject"
+      ],
+      "Resource": [
+        "arn:aws:s3:::${aws.tweet.bucketName}",
+        "arn:aws:s3:::${aws.tweet.bucketName}/*"
+      ]
+    },
+    {
+      "Sid": "",
+      "Effect": "Allow",
+      "Action": [
+        "logs:PutLogEvents"
+      ],
+      "Resource": [
+        "arn:aws:logs:us-west-2:482514484979:log-group:/aws/kinesisfirehose/${aws.tweet.streamName}:log-stream:*"
+      ]
+    }
+  ]
+}
