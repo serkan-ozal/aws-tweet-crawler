@@ -232,7 +232,7 @@ public class TweetCrawler {
     	
         ////////////////////////////////////////////////////////////////
     	
-        // Twitter stream authentication setup
+        // Twitter stream authentication configurations
         Properties twitterProps = getProperties("twitter-credentials.properties");
         
         // Set the configuration
@@ -248,10 +248,43 @@ public class TweetCrawler {
         TwitterStream twitterStream = new TwitterStreamFactory(twitterConf.build()).getInstance();
         twitterStream.addListener(new TweetListener(firehoseClient, streamName));
 
+        // Twitter filter configurations
+        Properties filterProps = getProperties("tweet-filters.properties");
+        
+        String languagesValue = filterProps.getProperty("tweet.filter.languages");
+        String[] languages = null;
+        if (languagesValue != null) {
+            languages = languagesValue.split(",");
+        }
+        
+        String keywordsValue = filterProps.getProperty("tweet.filter.keywords");
+        String[] keywords = null;
+        if (keywordsValue != null) {
+            keywords = keywordsValue.split(",");
+        }
+        
+        String locationsValue = filterProps.getProperty("tweet.filter.locations");
+        double[][] locations = null;
+        if (locationsValue != null) {
+            String[] locationsValueParts = locationsValue.split(",");
+            locations = new double[locationsValueParts.length / 2][2];
+            for (int i = 0; i < locations.length; i++) {
+                locations[i] = new double[2];
+                locations[i][0] = Double.parseDouble(locationsValueParts[i * 2]);
+                locations[i][1] = Double.parseDouble(locationsValueParts[i * 2 + 1]);
+            }
+        } else {
+            locations = new double[][] { { -180, -90 }, { 180, 90 } };
+        }
+        
         // Setup filter
         FilterQuery tweetFilterQuery = new FilterQuery();
-        tweetFilterQuery.language("tr");
-        double[][] locations = { { -180, -90 }, { 180, 90 } };
+        if (keywords != null && keywords.length > 0) {
+            tweetFilterQuery.track(keywords);
+        }
+        if (languages != null && languages.length > 0) {
+            tweetFilterQuery.language(languages);
+        }
         tweetFilterQuery.locations(locations);
         twitterStream.filter(tweetFilterQuery);
     }
@@ -268,14 +301,15 @@ public class TweetCrawler {
     	
 		@Override
         public void onStatus(Status status) {
-            LOGGER.info("Tweet by @" + status.getUser().getScreenName() + ": " + status.getText());
+		    if (LOGGER.isDebugEnabled()) {
+		        LOGGER.debug("Tweet by @" + status.getUser().getScreenName() + ": " + status.getText());
+		    }    
             String jsonData = DataObjectFactory.getRawJSON(status);
             ByteBuffer data = ByteBuffer.wrap(jsonData.getBytes());
-            PutRecordRequest putRecordRequest = new PutRecordRequest();
-            putRecordRequest.setDeliveryStreamName(streamName);
-            Record record = new Record();
-            record.setData(data);
-            putRecordRequest.setRecord(record);
+            PutRecordRequest putRecordRequest = 
+                    new PutRecordRequest()
+                        .withDeliveryStreamName(streamName)
+                        .withRecord(new Record().withData(data));
             firehoseClient.putRecord(putRecordRequest);
         }
         
