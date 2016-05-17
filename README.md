@@ -31,10 +31,19 @@ These properties can be specified as system property or can be given from **`twi
 
 * **`aws.tweet.bucketName:`** Bucket name for AWS S3 to store tweet data
 * **`aws.tweet.streamName:`** Stream name for AWS Kinesis Firehose pushing Tweet data
-* **`aws.tweet.bufferSize:`** Size in MBs to buffer tweet data on local before pushing to AWS S3. Default value is `64 MB`.
-* **`aws.tweet.bufferTime:`** Time in seconds to buffer tweet data on local before pushing to AWS S3. Default value is `900 seconds` (10 minutes).
+* **`aws.tweet.bufferSize:`** Size in MBs to buffer tweet data on AWS Firehose before uploading to AWS S3. Minimum value is `1MB`, maximum value is `128MB`. Default value is `64 MB`. 
+* **`aws.tweet.bufferTime:`** Time in seconds to buffer tweet data on local before pushing to AWS S3. Minimum value is `60 seconds` (1 minute), maximum value is `900 seconds` (15 minutes). Default value is `600 seconds` (10 minutes).
 
 These properties can be specified as system property or can be given from **`tweet-stream.properties`** configuration file.
+`128MB`. 
+2.4. Tweet Filter Configurations
+--------------
+
+* **`tweet.filter.languages:`** Interested languages to filter tweets. There can be multiple languages seperated by **comma** (`,`) but **without any space**. For example: `tr,en,fr`.
+* **`tweet.filter.keywords:`** Interested keywords to filter tweets. There can be multiple keywords seperated by **comma** (`,`) but **without any space**. For example: `football,basketball,tennis`.
+* **`tweet.filter.locations:`** Interested geographical region to filter tweets. Geographical points are given as `longitude,latitude` tupples. This means that given points are grouped as pair sequentially and first one is longitude value and the second one is latitude value. Each location point must be seperated by **comma** (`,`) but **without any space**. Default value is `[-180.0 longitude, -90.0 latitude] [+180.0 longitude, +90.0 latitude]` means all world. For example: `12.21,34.43,56.65,78.87`.
+
+These properties can be specified as system property or can be given from **`tweet-filters.properties`** configuration file.
 
 3. Deploy
 ==============
