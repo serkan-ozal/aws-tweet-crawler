@@ -47,5 +47,4 @@ These properties can be specified as system property or can be given from **`twe
 
 3. Deploy
 ==============
-
-TBD
+You can build and deploy the this Tweet crawler application to AWS via maven by `mvn -Pawseb clean package deploy` (or just run `build-and-deploy.sh`). So the crawler is packaged with its dependencies, uploaded to **AWS S3**, **AWS EC2** instance is provisioned and deployed onto it via **AWS Elastic Beanstalk**. Then it starts listening tweets and pushing them to **AWS S3** though **AWS Kinesis Firehose**.
