@@ -48,3 +48,9 @@ These properties can be specified as system property or can be given from **`twe
 3. Deploy
 ==============
 You can build and deploy the this Tweet crawler application to AWS via maven by `mvn -Pawseb clean package deploy` (or just run `build-and-deploy.sh`). So the crawler is packaged with its dependencies, uploaded to **AWS S3**, **AWS EC2** instance is provisioned and deployed onto it via **AWS Elastic Beanstalk**. Then it starts listening tweets and pushing them to **AWS S3** though **AWS Kinesis Firehose**.
+
+There are also some configurable properties in the `pom.xml`. Here are some of remarkable ones:
+* **`beanstalk.instanceType:`** Specifies instance type of the AWS EC2 machine where crawler runs. See [here](https://aws.amazon.com/ec2/instance-types) for more details about AWS EC2 instance types.
+* **`beanstalk.keyName:`** Specifies AWS EC2 key pair for connecting to the AWS EC2 machine where crawler runs.
+* **`beanstalk.environmentType:`** Specifies whether crawler will run as a single instance or as a cluster behind the load balancer on multiple AWS EC2 instance with auto scaling options. In this project we are using `Single Instance` environment type because current logic (behaviour) of the application is not suitable for clustering and auto scaling because even though there are multiple applications on multiple instances, all of them will receive same tweets and so there will be no load distribution between the applications in the cluster. I have just mentioned this configuration to show that there is a AWS feature that  can be useful for other cases.
+* **`aws:autoscaling.???:`** Specifies what is the limits of the cluster (minimum and maximum instance count in the cluster) for scaling up/down and in which conditions cluster will scale up/down.
