@@ -49,6 +49,14 @@ These properties can be specified as system property or can be given from **`twe
 ==============
 You can build and deploy the this Tweet crawler application to AWS via maven by `mvn -Pawseb clean package deploy` (or just run `build-and-deploy.sh`). So the crawler is packaged with its dependencies, uploaded to **AWS S3**, **AWS EC2** instance is provisioned and deployed onto it via **AWS Elastic Beanstalk**. Then it starts listening tweets and pushing them to **AWS S3** though **AWS Kinesis Firehose**.
 
+**IMPORTANT NOTE:** Notice that the AWS Elastic Beanstalk's maven [plugin](http://beanstalker.ingenieux.com.br/beanstalk-maven-plugin/usage.html) needs `~/.aws/credentials` file that contains your AWS access and secret keys in the following format:
+
+```
+[default]
+aws_access_key_id=XYZ123...
+aws_secret_access_key=ABC567...
+```
+
 There are also some configurable properties in the `pom.xml`. Here are some of remarkable ones:
 * **`beanstalk.instanceType:`** Specifies instance type of the AWS EC2 machine where crawler runs. See [here](https://aws.amazon.com/ec2/instance-types) for more details about AWS EC2 instance types.
 * **`beanstalk.keyName:`** Specifies AWS EC2 key pair for connecting to the AWS EC2 machine where crawler runs.
