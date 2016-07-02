@@ -10,12 +10,21 @@ import org.apache.log4j.Logger;
 
 import com.amazonaws.auth.AWSCredentials;
 import com.amazonaws.auth.BasicAWSCredentials;
+import com.amazonaws.services.elasticsearch.AWSElasticsearchClient;
+import com.amazonaws.services.elasticsearch.model.CreateElasticsearchDomainRequest;
+import com.amazonaws.services.elasticsearch.model.CreateElasticsearchDomainResult;
+import com.amazonaws.services.elasticsearch.model.DescribeElasticsearchDomainRequest;
+import com.amazonaws.services.elasticsearch.model.DescribeElasticsearchDomainResult;
+import com.amazonaws.services.elasticsearch.model.DomainInfo;
+import com.amazonaws.services.elasticsearch.model.ElasticsearchDomainStatus;
+import com.amazonaws.services.elasticsearch.model.ListDomainNamesRequest;
+import com.amazonaws.services.elasticsearch.model.ListDomainNamesResult;
 import com.amazonaws.services.identitymanagement.AmazonIdentityManagementClient;
 import com.amazonaws.services.identitymanagement.model.AttachRolePolicyRequest;
 import com.amazonaws.services.identitymanagement.model.CreatePolicyRequest;
-import com.amazonaws.services.identitymanagement.model.CreatePolicyResult;
 import com.amazonaws.services.identitymanagement.model.CreateRoleRequest;
 import com.amazonaws.services.identitymanagement.model.GetPolicyRequest;
+import com.amazonaws.services.identitymanagement.model.GetRolePolicyRequest;
 import com.amazonaws.services.identitymanagement.model.GetRoleRequest;
 import com.amazonaws.services.identitymanagement.model.NoSuchEntityException;
 import com.amazonaws.services.kinesisfirehose.AmazonKinesisFirehoseClient;
@@ -24,6 +33,10 @@ import com.amazonaws.services.kinesisfirehose.model.CompressionFormat;
 import com.amazonaws.services.kinesisfirehose.model.CreateDeliveryStreamRequest;
 import com.amazonaws.services.kinesisfirehose.model.DescribeDeliveryStreamRequest;
 import com.amazonaws.services.kinesisfirehose.model.DescribeDeliveryStreamResult;
+import com.amazonaws.services.kinesisfirehose.model.ElasticsearchBufferingHints;
+import com.amazonaws.services.kinesisfirehose.model.ElasticsearchDestinationConfiguration;
+import com.amazonaws.services.kinesisfirehose.model.ElasticsearchIndexRotationPeriod;
+import com.amazonaws.services.kinesisfirehose.model.ElasticsearchS3BackupMode;
 import com.amazonaws.services.kinesisfirehose.model.PutRecordRequest;
 import com.amazonaws.services.kinesisfirehose.model.Record;
 import com.amazonaws.services.kinesisfirehose.model.ResourceNotFoundException;
@@ -46,26 +59,39 @@ public class TweetCrawler {
 
     private static final Logger LOGGER = Logger.getLogger(TweetCrawler.class);
     
+    private static final Properties configs;
     private static final AWSCredentials awsCredentials;
-    
+
     static {
     	try {
-	    	// Twitter stream authentication setup
+    	    configs = getProperties("config.properties");
+    	    
 	        Properties awsProps = getProperties("aws-credentials.properties");
-	
 	        awsCredentials = 
 	        		new BasicAWSCredentials(
 	        				awsProps.getProperty("aws.accessKey"), 
 	        				awsProps.getProperty("aws.secretKey"));
+	        
     	} catch (IOException e) {
     		throw new RuntimeException(e);
     	}
     }
     
-    public static void main(String[] args) throws TwitterException, IOException {
-    	String streamName = createTweetStream();
-    	
-    	startTweetCrawling(streamName);
+    public static void main(String[] args) throws TwitterException, IOException {        
+        SearchInfo searchInfo = createTweetSearch();
+        if (searchInfo != null) {
+            LOGGER.info(searchInfo);
+            LOGGER.info("You can access, analyze and visualize your search data through Kibana on " + 
+                        "'" + searchInfo.searchDomainEndpoint + "/_plugin/kibana/" + "'");
+            LOGGER.info("You can use 'twitter' as index name while configuring index pattern on Kibana dashboard");
+        }
+        
+    	StreamInfo streamInfo = createTweetStream(searchInfo);
+        if (streamInfo != null) {
+            LOGGER.info(streamInfo);
+        }
+        
+    	startTweetCrawling(streamInfo, searchInfo);
     }
     
     private static Properties getProperties(String propFileName) throws IOException {
@@ -84,14 +110,140 @@ public class TweetCrawler {
         }
     }
     
-    private static String createTweetStream() throws IOException {
-        // Twitter stream configuration setup
+    private static String getContent(String fileName) {
+        InputStream is = 
+                TweetCrawler.class.getClassLoader().getResourceAsStream(fileName);
+        Scanner scanner = new Scanner(is);  
+        scanner.useDelimiter("\\Z");  
+        return scanner.next(); 
+    }
+    
+    private static class SearchInfo {
+        
+        private final String searchDomainName;
+        private final String searchDomainEndpoint;
+        private final String searchDomainARN;
+        
+        private SearchInfo(String searchDomainName, String searchDomainEndpoint, String searchDomainARN) {
+            this.searchDomainName = searchDomainName;
+            this.searchDomainEndpoint = searchDomainEndpoint;
+            this.searchDomainARN = searchDomainARN;
+        }
+
+        @Override
+        public String toString() {
+            return "SearchInfo [searchDomainName=" + searchDomainName
+                    + ", searchDomainEndpoint=" + searchDomainEndpoint
+                    + ", searchDomainARN=" + searchDomainARN + "]";
+        }
+
+    }
+    
+    private static SearchInfo createTweetSearch() throws IOException {
+        boolean tweetSearchEnable = Boolean.parseBoolean(configs.getProperty("config.tweetSearch.enable"));
+        if (!tweetSearchEnable) {
+            return null;
+        }
+        
+        ////////////////////////////////////////////////////////////////
+        
+        Properties streamProps = getProperties("tweet-search.properties");
+        String searchDomainName = streamProps.getProperty("aws.tweet.searchDomainName");
+
+        ////////////////////////////////////////////////////////////////
+        
+        AmazonIdentityManagementClient iamClient = new AmazonIdentityManagementClient(awsCredentials);
+        AWSElasticsearchClient elasticSearchClient = new AWSElasticsearchClient(awsCredentials);
+        
+        ////////////////////////////////////////////////////////////////
+        
+        ListDomainNamesRequest listDomainNamesRequest = new ListDomainNamesRequest();
+        ListDomainNamesResult listDomainNamesResult = 
+                elasticSearchClient.listDomainNames(listDomainNamesRequest);
+        
+        boolean skipSearchDomainCreation = false;
+        String searchDomainEndpoint = null;
+        String searchDomainARN = null;
+        
+        for (DomainInfo domainInfo : listDomainNamesResult.getDomainNames()) {
+            if (searchDomainName.equals(domainInfo.getDomainName())) {
+                skipSearchDomainCreation = true;
+                break;
+            }
+        }
+        
+        ////////////////////////////////////////////////////////////////
+        
+        if (!skipSearchDomainCreation) {
+            String accountId = iamClient.getUser().getUser().getUserId();
+            String searchDomainPolicyDefinition = getContent("search-policy-definition-template");
+
+            searchDomainPolicyDefinition = searchDomainPolicyDefinition.replace("${aws.user.accountId}", accountId);
+            searchDomainPolicyDefinition = searchDomainPolicyDefinition.replace("${aws.tweet.searchDomainName}", searchDomainName);
+            
+            CreateElasticsearchDomainRequest createSearchDomainRequest = 
+                    new CreateElasticsearchDomainRequest()
+                            .withDomainName(searchDomainName)
+                            .withAccessPolicies(searchDomainPolicyDefinition);
+            CreateElasticsearchDomainResult elasticsearchDomainResult = 
+                    elasticSearchClient.createElasticsearchDomain(createSearchDomainRequest);
+            ElasticsearchDomainStatus domainStatus = elasticsearchDomainResult.getDomainStatus();
+            searchDomainEndpoint = domainStatus.getEndpoint();
+            searchDomainARN = domainStatus.getARN();
+        }
+        
+        ////////////////////////////////////////////////////////////////
+        
+        while (true) {
+            DescribeElasticsearchDomainRequest describeSearchDomainRequest =
+                    new DescribeElasticsearchDomainRequest()
+                            .withDomainName(searchDomainName);
+            DescribeElasticsearchDomainResult describeSearchDomainResult =
+                    elasticSearchClient.describeElasticsearchDomain(describeSearchDomainRequest);
+            ElasticsearchDomainStatus domainStatus = describeSearchDomainResult.getDomainStatus();
+            if (domainStatus.isCreated() && !domainStatus.isProcessing()) {
+                searchDomainEndpoint = domainStatus.getEndpoint();
+                searchDomainARN = domainStatus.getARN();
+                break;
+            }
+            
+            LOGGER.info("Waiting search domain " + searchDomainName + " to be activated ...");
+            try {
+                Thread.sleep(5000);
+            } catch (InterruptedException e) {
+            }
+        }
+        
+        ////////////////////////////////////////////////////////////////
+
+        return new SearchInfo(searchDomainName, searchDomainEndpoint, searchDomainARN);
+    }     
+    
+    private static class StreamInfo {
+        
+        private final String streamName;
+        private final String bucketName;
+        
+        private StreamInfo(String streamName, String bucketName) {
+            this.streamName = streamName;
+            this.bucketName = bucketName;
+        }
+
+        @Override
+        public String toString() {
+            return "StreamInfo [streamName=" + streamName + ", bucketName="
+                    + bucketName + "]";
+        }
+
+    }
+    
+    private static StreamInfo createTweetStream(SearchInfo searchInfo) throws IOException {
         Properties streamProps = getProperties("tweet-stream.properties");
 
         String streamName = streamProps.getProperty("aws.tweet.streamName");
         String bucketName = streamProps.getProperty("aws.tweet.bucketName");
-        Integer destinationSizeInMBs = Integer.parseInt(streamProps.getProperty("aws.tweet.bufferSize", "64")); // Default 64 MB
-        Integer destinationIntervalInSeconds = Integer.parseInt(streamProps.getProperty("aws.tweet.bufferTime", "600")); // Default 10 mins
+        Integer destinationSizeInMBs = Integer.parseInt(streamProps.getProperty("aws.tweet.bufferSize", "16")); // Default 16 MB
+        Integer destinationIntervalInSeconds = Integer.parseInt(streamProps.getProperty("aws.tweet.bufferTime", "120")); // Default 2 mins
         String accountId = null;
         
         ////////////////////////////////////////////////////////////////
@@ -113,17 +265,20 @@ public class TweetCrawler {
         }
         
         if (!skipRoleCreation) {
-	        String roleDefinition = null; 
-	        InputStream inRole = TweetCrawler.class.getClassLoader().getResourceAsStream("role-definition-template");
-	        Scanner scanRole = new Scanner(inRole);  
-	        scanRole.useDelimiter("\\Z");  
-	        roleDefinition = scanRole.next(); 
+	        String roleDefinition = getContent("stream-role-definition-template"); 
+	        roleDefinition = roleDefinition.replace("${aws.user.accountId}", accountId);
 	
 	        CreateRoleRequest createRoleRequest = new CreateRoleRequest();
 	        createRoleRequest.setRoleName(roleName);
 	        createRoleRequest.setPath("/");
 	        createRoleRequest.setAssumeRolePolicyDocument(roleDefinition);
 	        iamClient.createRole(createRoleRequest);
+	        
+	        LOGGER.info("Waiting role " + roleName + " to be activated ...");
+	        try {
+	         Thread.sleep(5000);
+	        } catch (InterruptedException e) {
+	        }
         }
         
         ////////////////////////////////////////////////////////////////
@@ -139,35 +294,48 @@ public class TweetCrawler {
         }
         
         if (!skipPolicyCreation) {
-	        String policyDefinition = null; 
-	        InputStream inPolicy = TweetCrawler.class.getClassLoader().getResourceAsStream("policy-definition-template");
-	        Scanner scanPolicy = new Scanner(inPolicy);  
-	        scanPolicy.useDelimiter("\\Z");  
-	        policyDefinition = scanPolicy.next(); 
-	        
+	        String policyDefinition = getContent("stream-policy-definition-template");
 	        policyDefinition = policyDefinition.replace("${aws.tweet.bucketName}", bucketName);
 	        policyDefinition = policyDefinition.replace("${aws.tweet.streamName}", streamName);
+	        policyDefinition = policyDefinition.replace("${aws.user.accountId}", accountId);
+	        if (searchInfo != null) {
+	            policyDefinition = policyDefinition.replace("${aws.tweet.searchDomainName}", searchInfo.searchDomainName);
+	        } else {
+	            policyDefinition = policyDefinition.replace("${aws.tweet.searchDomainName}", "");
+	        }
 	        
 	        CreatePolicyRequest createPolicyRequest = new CreatePolicyRequest();
 	        createPolicyRequest.setPolicyName(policyName);
 	        createPolicyRequest.setPolicyDocument(policyDefinition);
-	        CreatePolicyResult createPolicyResult = iamClient.createPolicy(createPolicyRequest);
+	        iamClient.createPolicy(createPolicyRequest);
 	        
-	        AttachRolePolicyRequest attachRolePolicyRequest = new AttachRolePolicyRequest();
-	        attachRolePolicyRequest.setRoleName(roleName);
-	        attachRolePolicyRequest.setPolicyArn(createPolicyResult.getPolicy().getArn());
-	        iamClient.attachRolePolicy(attachRolePolicyRequest);
-	        
-	        try {
-				Thread.sleep(5000);
-			} catch (InterruptedException e) {
-			}
+	        LOGGER.info("Waiting policy " + policyName + " to be activated ...");
+            try {
+                Thread.sleep(5000);
+            } catch (InterruptedException e) {
+            }
         }
         
         ////////////////////////////////////////////////////////////////
-
-        if (!s3Client.doesBucketExist(bucketName)) {
-        	s3Client.createBucket(bucketName);
+        
+        boolean skipRolePolicyAttachment = false;
+        try {
+            iamClient.getRolePolicy(new GetRolePolicyRequest().withRoleName(roleName).withPolicyName(policyName));
+            skipRolePolicyAttachment = true;
+        } catch (NoSuchEntityException e) {
+        }
+        
+        if (!skipRolePolicyAttachment) {
+            AttachRolePolicyRequest attachRolePolicyRequest = new AttachRolePolicyRequest();
+            attachRolePolicyRequest.setRoleName(roleName);
+            attachRolePolicyRequest.setPolicyArn(policyArn);
+            iamClient.attachRolePolicy(attachRolePolicyRequest);
+            
+            LOGGER.info("Waiting role-policy attachment to be activated ...");
+            try {
+                Thread.sleep(5000);
+            } catch (InterruptedException e) {
+            }
         }
         
         ////////////////////////////////////////////////////////////////
@@ -180,42 +348,67 @@ public class TweetCrawler {
         }
         
         if (!skipStreamCreation) {
-	        // Create deliveryStream
 	        CreateDeliveryStreamRequest createDeliveryStreamRequest = new CreateDeliveryStreamRequest();
 	        createDeliveryStreamRequest.setDeliveryStreamName(streamName);
-	
-	        S3DestinationConfiguration s3DestinationConfiguration = new S3DestinationConfiguration();
-	        s3DestinationConfiguration.setBucketARN("arn:aws:s3:::" + bucketName);
-	        // Could also specify GZIP, ZIP, or SNAPPY
-	        s3DestinationConfiguration.setCompressionFormat(CompressionFormat.UNCOMPRESSED);
-	
-	        BufferingHints bufferingHints = null;
-	        if (destinationSizeInMBs != null || destinationIntervalInSeconds != null) {
-	            bufferingHints = new BufferingHints();
-	            bufferingHints.setSizeInMBs(destinationSizeInMBs);
-	            bufferingHints.setIntervalInSeconds(destinationIntervalInSeconds);
+	        
+	        if (!s3Client.doesBucketExist(bucketName)) {
+                s3Client.createBucket(bucketName);
+            }
+            
+            S3DestinationConfiguration s3DestinationConfiguration = new S3DestinationConfiguration();
+            
+            s3DestinationConfiguration.setBucketARN("arn:aws:s3:::" + bucketName);
+            s3DestinationConfiguration.setCompressionFormat(CompressionFormat.UNCOMPRESSED);
+    
+            BufferingHints bufferingHints = null;
+            if (destinationSizeInMBs != null || destinationIntervalInSeconds != null) {
+                bufferingHints = new BufferingHints();
+                bufferingHints.setSizeInMBs(destinationSizeInMBs);
+                bufferingHints.setIntervalInSeconds(destinationIntervalInSeconds);
+            }
+            s3DestinationConfiguration.setBufferingHints(bufferingHints);
+    
+            s3DestinationConfiguration.setRoleARN("arn:aws:iam::" + accountId + ":role/" + roleName);
+    
+            ////////////////////////////////////////////////////////////////
+            
+            if (searchInfo == null) {
+                createDeliveryStreamRequest.setS3DestinationConfiguration(s3DestinationConfiguration);
+            } else {
+	            ElasticsearchDestinationConfiguration esDestinationConfiguration = new ElasticsearchDestinationConfiguration();
+
+	            esDestinationConfiguration.setDomainARN(searchInfo.searchDomainARN);
+	            esDestinationConfiguration.setIndexName("twitter");
+	            esDestinationConfiguration.setTypeName("tweet");
+	            esDestinationConfiguration.setS3BackupMode(ElasticsearchS3BackupMode.AllDocuments);
+	            esDestinationConfiguration.setIndexRotationPeriod(ElasticsearchIndexRotationPeriod.NoRotation);
+	            esDestinationConfiguration.setS3Configuration(s3DestinationConfiguration);
+	            
+                ElasticsearchBufferingHints esBufferingHints = null;
+                if (destinationSizeInMBs != null || destinationIntervalInSeconds != null) {
+                    esBufferingHints = new ElasticsearchBufferingHints();
+                    esBufferingHints.setSizeInMBs(destinationSizeInMBs);
+                    esBufferingHints.setIntervalInSeconds(destinationIntervalInSeconds);
+                }
+                esDestinationConfiguration.setBufferingHints(esBufferingHints);
+                
+                esDestinationConfiguration.setRoleARN("arn:aws:iam::" + accountId + ":role/" + roleName);
+
+	            createDeliveryStreamRequest.setElasticsearchDestinationConfiguration(esDestinationConfiguration);
 	        }
-	        s3DestinationConfiguration.setBufferingHints(bufferingHints);
-	
-	        // Create and set the IAM role so that Firehose has access to the S3 buckets to put data
-	        // and AWS KMS keys (if provided) to encrypt data. Please check the trustPolicyDocument.json and
-	        // permissionsPolicyDocument.json files for the trust and permissions policies set for the role.
-	        s3DestinationConfiguration.setRoleARN("arn:aws:iam::" + accountId + ":role/" + roleName);
-	
-	        createDeliveryStreamRequest.setS3DestinationConfiguration(s3DestinationConfiguration);
-	
+	        
 	        firehoseClient.createDeliveryStream(createDeliveryStreamRequest);
         }
         
         ////////////////////////////////////////////////////////////////
 
-        return streamName;
+        return new StreamInfo(streamName, bucketName);
     }
-    
-    private static void startTweetCrawling(String streamName) throws IOException {
+
+    private static void startTweetCrawling(StreamInfo streamInfo, SearchInfo searchInfo) throws IOException {
     	AmazonKinesisFirehoseClient firehoseClient = new AmazonKinesisFirehoseClient(awsCredentials);
     	DescribeDeliveryStreamRequest describeDeliveryStreamRequest = new DescribeDeliveryStreamRequest();
-    	describeDeliveryStreamRequest.setDeliveryStreamName(streamName);
+    	describeDeliveryStreamRequest.setDeliveryStreamName(streamInfo.streamName);
     	
     	while (true) {
     		DescribeDeliveryStreamResult deliveryStreamResult = 
@@ -223,19 +416,17 @@ public class TweetCrawler {
     		if ("ACTIVE".equals(deliveryStreamResult.getDeliveryStreamDescription().getDeliveryStreamStatus())) {
     			break;
     		}
-    		LOGGER.info("Waiting stream " + streamName + " to be activated ...");
+    		LOGGER.info("Waiting stream " + streamInfo.streamName + " to be activated ...");
     		try {
-				Thread.sleep(1000);
+				Thread.sleep(5000);
 			} catch (InterruptedException e) {
 			}
     	}	
     	
         ////////////////////////////////////////////////////////////////
     	
-        // Twitter stream authentication configurations
         Properties twitterProps = getProperties("twitter-credentials.properties");
         
-        // Set the configuration
         ConfigurationBuilder twitterConf = new ConfigurationBuilder();
         twitterConf.setIncludeEntitiesEnabled(true);
         twitterConf.setOAuthAccessToken(twitterProps.getProperty("twitter.oauth.accessToken"));
@@ -244,11 +435,9 @@ public class TweetCrawler {
         twitterConf.setOAuthConsumerSecret(twitterProps.getProperty("twitter.oauth.consumerSecret"));
         twitterConf.setJSONStoreEnabled(true);
 
-        // Create stream
         TwitterStream twitterStream = new TwitterStreamFactory(twitterConf.build()).getInstance();
-        twitterStream.addListener(new TweetListener(firehoseClient, streamName));
+        twitterStream.addListener(new TweetListener(firehoseClient, streamInfo.streamName));
 
-        // Twitter filter configurations
         Properties filterProps = getProperties("tweet-filters.properties");
         
         String languagesValue = filterProps.getProperty("tweet.filter.languages");
@@ -277,7 +466,6 @@ public class TweetCrawler {
             locations = new double[][] { { -180, -90 }, { 180, 90 } };
         }
         
-        // Setup filter
         FilterQuery tweetFilterQuery = new FilterQuery();
         if (keywords != null && keywords.length > 0) {
             tweetFilterQuery.track(keywords);
@@ -303,13 +491,13 @@ public class TweetCrawler {
         public void onStatus(Status status) {
 		    if (LOGGER.isDebugEnabled()) {
 		        LOGGER.debug("Tweet by @" + status.getUser().getScreenName() + ": " + status.getText());
-		    }    
-            String jsonData = DataObjectFactory.getRawJSON(status);
-            ByteBuffer data = ByteBuffer.wrap(jsonData.getBytes());
+		    }
+            String tweetJsonData = DataObjectFactory.getRawJSON(status) + "\n";
+            ByteBuffer tweetData = ByteBuffer.wrap(tweetJsonData.getBytes());
             PutRecordRequest putRecordRequest = 
                     new PutRecordRequest()
                         .withDeliveryStreamName(streamName)
-                        .withRecord(new Record().withData(data));
+                        .withRecord(new Record().withData(tweetData));
             firehoseClient.putRecord(putRecordRequest);
         }
         

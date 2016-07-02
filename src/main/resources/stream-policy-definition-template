@@ -1,0 +1,63 @@
+{  
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "",
+      "Effect": "Allow",
+      "Action": [
+        "s3:AbortMultipartUpload",
+        "s3:GetBucketLocation",
+        "s3:GetObject",
+        "s3:ListBucket",
+        "s3:ListBucketMultipartUploads",
+        "s3:PutObject"
+      ],
+      "Resource": [
+        "arn:aws:s3:::${aws.tweet.bucketName}",
+        "arn:aws:s3:::${aws.tweet.bucketName}/*"
+      ]
+    },
+    {
+      "Sid": "",
+      "Effect": "Allow",
+      "Action": [
+        "es:DescribeElasticsearchDomain",
+        "es:DescribeElasticsearchDomains",
+        "es:DescribeElasticsearchDomainConfig",
+        "es:ESHttpPost",
+        "es:ESHttpPut"
+      ],
+      "Resource": [
+        "arn:aws:es:*:${aws.user.accountId}:domain/${aws.tweet.searchDomainName}",
+        "arn:aws:es:*:${aws.user.accountId}:domain/${aws.tweet.searchDomainName}/*"
+      ]
+    },
+    {
+      "Sid": "",
+      "Effect": "Allow",
+      "Action": [
+        "es:ESHttpGet"
+      ],
+      "Resource": [
+        "arn:aws:es:*:${aws.user.accountId}:domain/${aws.tweet.searchDomainName}/_all/_settings",
+        "arn:aws:es:*:${aws.user.accountId}:domain/${aws.tweet.searchDomainName}/_cluster/stats",
+        "arn:aws:es:*:${aws.user.accountId}:domain/${aws.tweet.searchDomainName}/twitter*/_mapping/tweet",
+        "arn:aws:es:*:${aws.user.accountId}:domain/${aws.tweet.searchDomainName}/_nodes",
+        "arn:aws:es:*:${aws.user.accountId}:domain/${aws.tweet.searchDomainName}/_nodes/stats",
+        "arn:aws:es:*:${aws.user.accountId}:domain/${aws.tweet.searchDomainName}/_nodes/*/stats",
+        "arn:aws:es:*:${aws.user.accountId}:domain/${aws.tweet.searchDomainName}/_stats",
+        "arn:aws:es:*:${aws.user.accountId}:domain/${aws.tweet.searchDomainName}/twitter*/_stats"
+      ]
+    },
+    {
+      "Sid": "",
+      "Effect": "Allow",
+      "Action": [
+        "logs:PutLogEvents"
+      ],
+      "Resource": [
+        "arn:aws:logs:*:${aws.user.accountId}:log-group:/aws/kinesisfirehose/${aws.tweet.streamName}:log-stream:*"
+      ]
+    }
+  ]
+}

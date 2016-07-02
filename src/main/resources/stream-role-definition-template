@@ -5,6 +5,6 @@
 		"Effect":"Allow",
 		"Principal":{"Service":"firehose.amazonaws.com"},
 		"Action":"sts:AssumeRole",
-		"Condition":{"StringEquals":{"sts:ExternalId":"482514484979"}}
+		"Condition":{"StringEquals":{"sts:ExternalId":"${aws.user.accountId}"}}
 	}]
 }
